@@ -1,0 +1,84 @@
+name: Release DMG
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Version to release, e.g. v0.2.0
+        default: v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, verify, and publish macOS DMG
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select version
+        id: version
+        shell: bash
+        env:
+          MANUAL_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag="$MANUAL_TAG"
+          if [[ -z "$tag" ]]; then tag="v0.1.0"; fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION=$(echo "$tag" | sed 's/^v//')" >> "$GITHUB_ENV"
+
+      - name: Check if this version is already published
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release already exists: $TAG"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Theme matching tests
+        if: steps.check.outputs.exists != 'true'
+        run: ./tests/test-matcher.sh
+
+      - name: Build signed macOS application and create DMG
+        if: steps.check.outputs.exists != 'true'
+        run: ./package-dmg.sh
+
+      - name: Verify DMG SHA-256
+        if: steps.check.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "dist/FinderIconTheme-v$APP_VERSION-macOS.dmg"
+          (cd dist && shasum -a 256 -c "FinderIconTheme-v$APP_VERSION-macOS.dmg.sha256")
+
+      - name: Publish GitHub Release
+        if: steps.check.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Finder Icon Theme ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.dmg
+            dist/*.sha256
+          body: |
+            Download the .dmg and drag FinderIconTheme.app into Applications.
+            Ad-hoc signed, NOT Apple notarized. See README for Gatekeeper details.
