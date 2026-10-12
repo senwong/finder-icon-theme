@@ -1,0 +1,23 @@
+{
+  "name": "My Icons",
+  "rules": [
+    {
+      "kind": "filename",
+      "match": "Dockerfile",
+      "glyph": "DOC",
+      "color": "#3178C6"
+    },
+    {
+      "kind": "extension",
+      "match": "ts",
+      "glyph": "TS",
+      "color": "#3178C6"
+    },
+    {
+      "kind": "folder",
+      "match": "src",
+      "glyph": "SRC",
+      "color": "#279C79"
+    }
+  ]
+}
