@@ -6,7 +6,12 @@ A native macOS **Finder file icon theme manager** (macOS 13+, SwiftUI + AppKit).
 
 **[GitHub Releases](https://github.com/senwong/finder-icon-theme/releases)**
 
-Download FinderIconTheme-v0.1.0-macOS.dmg, open it and drag FinderIconTheme.app into Applications.
+Choose the DMG for your Mac, open it, then drag FinderIconTheme.app into Applications:
+
+- **Intel (x86_64; macOS 13+)**: `FinderIconTheme-v0.1.1-macOS-x86_64.dmg`
+- **Apple Silicon (arm64; macOS 13+)**: `FinderIconTheme-v0.1.1-macOS-arm64.dmg`
+
+Find your chip with `uname -m`. A DMG built for Apple Silicon alone cannot run on Intel. Releases are built with separate GitHub Actions runners and verify the *actual Mach-O binary* has the expected architecture and minimum macOS 13.0 deployment target. Note: CI builds on macOS 15; it does not yet execute the app on a macOS 13 machine.
 
 > The initial release is ad-hoc signed, **not Apple-notarized**. macOS Gatekeeper may warn on first launch. Only allow it after checking the repository and release yourself. To avoid Gatekeeper warnings entirely, Developer ID signing + Apple notarization are required.
 
@@ -32,11 +37,11 @@ Install Xcode Command Line Tools on macOS, then:
 ./package-dmg.sh
 ~~~
 
-Local outputs: dist/FinderIconTheme.app and dist/FinderIconTheme-v0.1.0-macOS.dmg.
+Local outputs: `dist/FinderIconTheme.app` and `dist/FinderIconTheme-v0.1.1-macOS-$(uname -m).dmg` (replace `$(uname -m)` with your architecture).
 
 ## Publish
 
-The GitHub Actions **Release DMG** workflow builds on macOS 15, tests theme matching and uploads the DMG + SHA-256 to Releases. Its first run creates v0.1.0. For subsequent versions, use Actions > Release DMG > Run workflow and provide a new tag such as v0.2.0.
+The GitHub Actions **Release DMG** workflow builds both Intel (`macos-15-intel`) and Apple Silicon (`macos-15`) variants, verifies their Mach-O deployment targets, tests theme matching and uploads both architecture-specific DMGs + SHA-256 files. Pushing the compatibility fix creates v0.1.1. For subsequent versions, use Actions > Release DMG > Run workflow and enter a new tag such as v0.2.0.
 
 ## Security
 

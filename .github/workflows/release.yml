@@ -7,7 +7,7 @@ on:
     inputs:
       release_tag:
         description: Version to release, e.g. v0.2.0
-        default: v0.1.0
+        default: v0.1.1
         required: true
         type: string
 
@@ -15,70 +15,128 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build, verify, and publish macOS DMG
-    runs-on: macos-15
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Select version
         id: version
         shell: bash
         env:
-          MANUAL_TAG: ${{ github.event.inputs.release_tag }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           tag="$MANUAL_TAG"
-          if [[ -z "$tag" ]]; then tag="v0.1.0"; fi
+          if [[ -z "$tag" ]]; then tag="v0.1.1"; fi
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid tag: $tag" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "APP_VERSION=$(echo "$tag" | sed 's/^v//')" >> "$GITHUB_ENV"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Check if this version is already published
+      - name: Check if release already exists
         id: check
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release already exists: $TAG"
+            echo "Release $TAG already exists; no overwrite."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Theme matching tests
-        if: steps.check.outputs.exists != 'true'
-        run: ./tests/test-matcher.sh
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.exists != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Build signed macOS application and create DMG
-        if: steps.check.outputs.exists != 'true'
-        run: ./package-dmg.sh
+      - name: Run matcher tests
+        run: bash ./tests/test-matcher.sh
 
-      - name: Verify DMG SHA-256
-        if: steps.check.outputs.exists != 'true'
+      - name: Build and package macOS 13+ DMG
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: bash ./package-dmg.sh
+
+      - name: Verify app binary and DMG
         shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          test -s "dist/FinderIconTheme-v$APP_VERSION-macOS.dmg"
-          (cd dist && shasum -a 256 -c "FinderIconTheme-v$APP_VERSION-macOS.dmg.sha256")
+          test "$(uname -m)" = "$BUILD_ARCH"
+          test "$(lipo -archs dist/FinderIconTheme.app/Contents/MacOS/FinderIconTheme)" = "$BUILD_ARCH"
+          dmg="FinderIconTheme-v${APP_VERSION}-macOS-${BUILD_ARCH}.dmg"
+          test -s "dist/$dmg"
+          (cd dist && shasum -a 256 -c "$dmg.sha256")
+
+      - name: Upload architecture-specific DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: finder-icon-theme-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both macOS architectures
+        uses: actions/download-artifact@v4
+        with:
+          pattern: finder-icon-theme-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify both DMGs and SHA-256 checksums
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          for arch in x86_64 arm64; do
+            dmg="FinderIconTheme-v${APP_VERSION}-macOS-${arch}.dmg"
+            test -s "dist/$dmg"
+            test -s "dist/$dmg.sha256"
+          done
+          (cd dist && for checksum in *.sha256; do sha256sum -c "$checksum"; done)
 
       - name: Publish GitHub Release
-        if: steps.check.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Finder Icon Theme ${{ steps.version.outputs.tag }}
+          name: Finder Icon Theme ${{ needs.prepare.outputs.tag }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
             dist/*.dmg
             dist/*.sha256
           body: |
-            Download the .dmg and drag FinderIconTheme.app into Applications.
-            Ad-hoc signed, NOT Apple notarized. See README for Gatekeeper details.
+            macOS 13+ downloads (choose the matching chip):
+            - Intel Mac (x86_64): FinderIconTheme-*-macOS-x86_64.dmg
+            - Apple Silicon (M1/M2/M3/etc.): FinderIconTheme-*-macOS-arm64.dmg
+
+            App is ad-hoc signed, NOT Apple-notarized. See README for Gatekeeper details.
